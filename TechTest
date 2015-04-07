@@ -1,0 +1,110 @@
+#!/usr/bin/perl
+#
+# Technical Test Related to Data Analysis  
+#
+# Christian Pesca 04/05/2015
+# 
+# #######################################
+
+use strict;
+use POSIX;
+
+use strict;
+use warnings;
+use DBI;
+use Data::Table;
+
+my $t2;
+my $t_product;
+my $x = 0;
+my @t_lines;
+my $t_lines;
+my @o_lines;
+my $o_lines;
+my $found = 0;
+my $per_client;
+my $per_general;
+my $per_diff;
+my $status;
+my $csv_file = 'Customer,Country,Operator,Operator Total Tx,Client Tx,Client Tx %,Status'."\n";
+#my $critical = 0.3;
+
+my $folder = $ARGV[0] or die "Need to get Report files \"/path/\" on the command line ARGV[0].\n";
+my $file = $ARGV[1] or die "Need to get CSV file \"name.csv\" on the command line ARGV[1].\n";
+my $critical = $ARGV[2] or die "Please put the critical value you need on the command line ARGV[2].\n";
+my $dt = Data::Table::fromCSV($folder.$file);
+
+sub total_operator {  # This is an subroutine to calculate Operator Total Transactions
+	my @data = @_;
+	my ($sum, $n) = (0, 0);
+	foreach $x (@data) {
+	next unless $x;
+	$sum += $x; $n++;
+	}
+	return ($n>0)?$sum:undef;
+}
+
+
+  
+$t2 = $dt->group(["Operator","Country"],["Customer", "Number of Transactions"], [sub {scalar @_}, \&total_operator], ["No Customer", "Total Transactions"]);
+
+$dt = new Data::Table();
+
+open (TMPCSV, ">/tmp/Total_Operators.csv");
+print TMPCSV $t2->csv;
+close (TMPCSV); 
+
+$t2 = new Data::Table();
+
+# ----------     Report Generation in CSV  -----------------------------------------------------------------------------------
+#
+open(TRAFFIC, "<". $folder.$file);
+my $filename = $folder ."Traffic_Report_".time().".csv";
+open (REPORT, ">>$filename");
+print REPORT "$csv_file";
+while (<TRAFFIC>) { # Check each Client  Transactions 
+	next if $. < 2; # Skip first Header line
+	@t_lines = split ",";
+	chomp $t_lines[3];
+	
+	# Total Operators Transactions Loop
+	$csv_file = '';
+	open(TMPCSV, "< /tmp/Total_Operators.csv");
+	while( (<TMPCSV>) ){
+		next if $. < 2; # Skip first Header line
+		@o_lines = split ",";
+		chomp $o_lines[3];
+		if ( ($o_lines[0] eq $t_lines[1]) and ($o_lines[1] eq $t_lines[2]) ){
+			$per_client = $t_lines[3]/$o_lines[3];
+			$per_general = 1/$o_lines[2];
+			$per_diff = (($per_general/2) - $per_client)*100; 	
+			if  ($per_diff < 0){
+				$status = "OK";
+				#print "$t_lines[0],$o_lines[0],$o_lines[1],$t_lines[3],$o_lines[3],$o_lines[2],$per_client,$per_general,$per_diff,$status\n";
+				$csv_file = "$t_lines[0],$o_lines[0],$o_lines[1],$o_lines[3],$t_lines[3],".sprintf("%.2f", $per_client*100) ."%,$status\n";
+			} 
+			if ($per_diff > $critical) {
+				$status = "NotR";
+				#print "$t_lines[0],$o_lines[0],$o_lines[1],$t_lines[3],$o_lines[3],$o_lines[2],$per_client,$per_general,$per_diff,$status\n";
+			} 
+			if ( ($per_diff < $critical) and ($per_diff > 0) ) {
+				$status = "Warn";
+				#print "$t_lines[0],$o_lines[0],$o_lines[1],$t_lines[3],$o_lines[3],$o_lines[2],$per_client,$per_general,$per_diff,$status\n";
+				$csv_file = "$t_lines[0],$o_lines[0],$o_lines[1],$o_lines[3],$t_lines[3],".sprintf("%.2f", $per_client*100) ."%,$status\n";
+			}
+			last;
+		}
+	}
+	print REPORT "$csv_file";
+	close(TMPCSV);	
+}
+close(REPORT);
+close(TRAFFIC);
+
+# Convert Report to HTML
+my $final = Data::Table::fromCSV($filename);
+my $filenamereport = $folder ."Report_". $file .".html";
+open (FINAL,">$filenamereport");
+print FINAL $final->html;
+close(FINAL);
+print "\nReports Generated:\n$filenamereport\n$filename\n";
